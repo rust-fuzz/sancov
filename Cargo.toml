@@ -1,9 +1,13 @@
 [package]
-name = "sancov"
-version = "0.1.0"
+authors = ["The Rust-Fuzz Project Developers"]
+description = "Rust bindings to LLVM's `SanitizerCoverage` interface."
+documentation = "https://docs.rs/sancov"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+keywords = ["fuzzing", "fuzz", "coverage", "counters"]
+license = "MIT OR Apache-2.0"
+name = "sancov"
+repository = "https://github.com/rust-fuzz/sancov"
+version = "0.1.0"
 
 [dependencies]
 fxhash = { version = "0.2.1", optional = true }

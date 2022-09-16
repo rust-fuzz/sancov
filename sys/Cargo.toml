@@ -1,8 +1,12 @@
 [package]
-name = "sancov-sys"
-version = "0.1.0"
+authors = ["The Rust-Fuzz Project Developers"]
+description = "Raw bindings to LLVM's `SanitizerCoverage` interface."
 edition = "2021"
+license = "MIT OR Apache-2.0"
 links = "sancov"
+name = "sancov-sys"
+repository = "https://github.com/rust-fuzz/sancov"
+version = "0.1.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
