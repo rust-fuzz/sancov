@@ -149,6 +149,7 @@ impl CounterSliceExt for [Counter] {
 #[cold]
 #[inline(never)]
 #[track_caller]
+#[allow(dead_code)]
 fn panic(msg: &str) -> ! {
     panic!("{msg}");
 }
