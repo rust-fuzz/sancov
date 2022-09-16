@@ -2,87 +2,132 @@
 //! interface](https://clang.llvm.org/docs/SanitizerCoverage.html).
 //!
 //! These bindings are designed for generating coverage information
-//! (e.g. exposing coverage in JIT code) not defining consumers of it.
+//! (e.g. exposing JIT code coverage to a fuzzer) not defining consumers of it.
 
 #![no_std]
 #![deny(missing_docs)]
 
+use core::cell::UnsafeCell;
+use core::ops::Index;
 use core::sync::atomic::{AtomicU8, Ordering};
 use sancov_sys as sys;
 
-/// A single 8-bit counter.
+/// An collection of `N` counters.
 ///
-/// It can be incremented.
-///
-/// It has the same representation as a `u8`. You can rely on this fact and
-/// increment this counter from, for example, JIT code.
+/// Counters must be registered by calling the
+/// [`register`][crate::Counters::register] method.
 ///
 /// The `SanitizerCoverage` consumer can observe this counter and do things like
 /// e.g. provide feedback for fuzzing engines.
 ///
-/// However, the consumer can't see this counter unless it is registered with
-/// [`register_counters`][crate::register_counters].
-#[derive(Clone, Copy)]
+/// You can index into `Counters` with `usize` indices to get individual
+/// `Counter`s.
+///
+/// `Counters<N>` has the same representation as `[u8; N]`. You can rely on this
+/// fact and increment this counter from, for example, JIT code.
+///
+/// # Example
+///
+/// ```
+/// use sancov::Counters;
+///
+/// // Define some counters.
+/// static COUNTERS: Counters<4096> = Counters::new();
+///
+/// // Register the counters with the `SanitizerCoverage` consumer.
+/// COUNTERS.register();
+///
+/// // Increment a counter.
+/// COUNTERS[42].increment();
+/// #
+/// # #[no_mangle]
+/// # pub fn __sanitizer_cov_8bit_counters_init(_: *const u8, _: *const u8) {}
+/// ```
 #[repr(transparent)]
-pub struct Counter(
-    // This should really be `AtomicU8` but that isn't `Copy` and the whole
-    // point of this type is to define `static`s with literals like
-    // `[Counter::new(); 4096]`. One day, when `#![feature(inline_const)]`
-    // stabilizes we will be able to make this type an actual wrapper around
-    // `AtomicU8` and do things like `[const { Counter::new() }; 4096]` which
-    // doesn't require `Copy`. Until then... fingers crossed this isn't UB? Or
-    // at least not UB enough to get mis-optimized? ...
-    u8,
-);
+pub struct Counters<const N: usize>(UnsafeCell<[u8; N]>);
 
-impl Counter {
-    /// Create a new counter.
+unsafe impl<const N: usize> Send for Counters<N> {}
+unsafe impl<const N: usize> Sync for Counters<N> {}
+
+impl<const N: usize> Counters<N> {
+    /// Construct a new set of `N` counters.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use sancov::Counters;
+    ///
+    /// // Define some counters.
+    /// static COUNTERS: Counters<4096> = Counters::new();
+    ///
+    /// // Register the counters with the `SanitizerCoverage` consumer.
+    /// COUNTERS.register();
+    /// #
+    /// # #[no_mangle]
+    /// # pub fn __sanitizer_cov_8bit_counters_init(_: *const u8, _: *const u8) {}
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `N` is zero.
+    ///
+    /// ```should_panic
+    /// use sancov::Counters;
+    ///
+    /// // This call will panic.
+    /// let _ = Counters::<0>::new();
+    /// ```
     pub const fn new() -> Self {
-        Counter(0)
+        let _n_cannot_be_zero = [()][(N == 0) as usize];
+        Counters(UnsafeCell::new([0; N]))
     }
 
-    fn as_atomic(&self) -> &AtomicU8 {
-        // See comment above about how `self.0` should really be an
-        // `AtomicU8`...
+    /// Get the underying array of counters.
+    #[inline]
+    pub fn as_array(&self) -> &[Counter; N] {
         unsafe {
-            let ptr = &self.0 as *const u8;
-            &*(ptr as *const AtomicU8)
+            let ptr: *mut [u8; N] = self.0.get();
+            let ptr: *const [u8; N] = ptr as _;
+            let ptr: *const [Counter; N] = ptr as _;
+            &*ptr
         }
     }
 
-    /// Increment this counter.
+    /// Register the given counters with the `SanitizerCoverage` consumer.
     ///
-    /// This uses AFL++'s "NeverZero" approach, where we add the overflow carry
-    /// back to the counter, so that it is never zero after its been incremented
-    /// once. This avoids accidentally losing information in the face of
-    /// multiples-of-256 harmonics and they found it to be faster in practice
-    /// than doing a saturating add.
+    /// The `SanitizerCoverage` API unfortunately does not provide any method of
+    /// unregistering counters, so the given `counters` slice must be `'static`.
     ///
-    /// See section 3.3 of [the AFL++
-    /// paper](https://www.usenix.org/system/files/woot20-paper-fioraldi.pdf)
-    /// for details.
-    #[inline]
-    pub fn increment(&self) {
-        let count = self.as_atomic().load(Ordering::Relaxed);
-        let (count, overflowed) = count.overflowing_add(1);
-        self.as_atomic()
-            .store(count + (overflowed as u8), Ordering::Relaxed);
+    /// Repeated registration is idempotent but not necessarily
+    /// performant. Consider using `std::sync::Once` or [the `ctor`
+    /// crate](https://crates.io/crates/ctor).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use sancov::Counters;
+    ///
+    /// // Define some counters.
+    /// static COUNTERS: Counters<4096> = Counters::new();
+    ///
+    /// // Register the counters with the `SanitizerCoverage` consumer.
+    /// COUNTERS.register();
+    /// #
+    /// # #[no_mangle]
+    /// # pub fn __sanitizer_cov_8bit_counters_init(_: *const u8, _: *const u8) {}
+    /// ```
+    pub fn register(&'static self) {
+        unsafe {
+            let start = self.as_array().as_ptr() as *const u8;
+            let end = start.add(N) as *const u8;
+            sys::__sanitizer_cov_8bit_counters_init(start, end);
+        }
     }
 
-    /// Increment this counter, saturating at `u8::MAX`.
-    pub fn saturating_increment(&self) {
-        let count = self.as_atomic().load(Ordering::Relaxed);
-        self.as_atomic()
-            .store(count.saturating_add(1), Ordering::Relaxed);
-    }
-}
-
-/// An extension trait for slices of `Counter`s.
-pub trait CounterSliceExt {
     /// Increment the counter at index `fxhash(x) % self.len()`.
     ///
-    /// This allows you to map an "infinited" number of logical counters down
-    /// onto a bounded number of actual counters.
+    /// This allows you to map an unbounded number of logical counters down onto
+    /// a bounded number of actual counters.
     ///
     /// Useful when:
     ///
@@ -105,10 +150,10 @@ pub trait CounterSliceExt {
     /// # Example
     ///
     /// ```
-    /// use sancov::{Counter, CounterSliceExt};
+    /// use sancov::Counters;
     ///
-    /// static COUNTERS: [Counter; 16] = [Counter::new(); 16];
-    /// sancov::register_counters(&COUNTERS);
+    /// static COUNTERS: Counters<16> = Counters::new();
+    /// COUNTERS.register();
     ///
     /// // Increment the "i^th" counter, where `i` is larger than how many
     /// // actual counters we have.
@@ -124,58 +169,60 @@ pub trait CounterSliceExt {
     /// # #[no_mangle]
     /// # pub fn __sanitizer_cov_8bit_counters_init(_: *const u8, _: *const u8) {}
     /// ```
-    #[cfg(feature = "hash_increment")]
-    fn hash_increment<T>(&self, x: &T)
-    where
-        T: ?Sized + core::hash::Hash;
-}
-
-impl CounterSliceExt for [Counter] {
     #[inline]
     #[cfg(feature = "hash_increment")]
-    fn hash_increment<T>(&self, x: &T)
+    pub fn hash_increment<T>(&self, x: &T)
     where
         T: ?Sized + core::hash::Hash,
     {
-        if self.len() == 0 {
-            panic("cannot increment a counter inside an empty slice of counters");
-        }
-
-        let i = fxhash::hash(x) % self.len();
+        assert_ne!(N, 0);
+        let i = fxhash::hash(x) % N;
         self[i].increment();
     }
 }
 
-#[cold]
-#[inline(never)]
-#[track_caller]
-#[allow(dead_code)]
-fn panic(msg: &str) -> ! {
-    panic!("{msg}");
+impl<const N: usize> Index<usize> for Counters<N> {
+    type Output = Counter;
+
+    #[inline]
+    fn index(&self, index: usize) -> &Self::Output {
+        assert!(index < N);
+        &self.as_array()[index]
+    }
 }
 
-/// Register the given counters with the `SanitizerCoverage` consumer.
+/// A single 8-bit counter.
 ///
-/// The `SanitizerCoverage` API unfortunately does not provide any method of
-/// unregistering counters, so the given `counters` slice must be `'static`.
+/// It can be incremented.
 ///
-/// # Example
-///
-/// ```
-/// use sancov::Counter;
-///
-/// static COUNTERS: [Counter; 4096] = [Counter::new(); 4096];
-///
-/// sancov::register_counters(&COUNTERS);
-/// #
-/// # #[no_mangle]
-/// # pub fn __sanitizer_cov_8bit_counters_init(_: *const u8, _: *const u8) {}
-/// ```
-pub fn register_counters(counters: &'static [Counter]) {
-    unsafe {
-        let start = counters.as_ptr() as *const u8;
-        let end = start.add(counters.len()) as *const u8;
-        sys::__sanitizer_cov_8bit_counters_init(start, end);
+/// It has the same representation as a `u8`. You can rely on this fact and
+/// increment this counter from, for example, JIT code.
+#[repr(transparent)]
+pub struct Counter(AtomicU8);
+
+impl Counter {
+    /// Increment this counter.
+    ///
+    /// This uses AFL++'s "NeverZero" approach, where we add the overflow carry
+    /// back to the counter, so that it is never zero after its been incremented
+    /// once. This avoids accidentally losing information in the face of
+    /// multiples-of-256 harmonics and they found it to be faster in practice
+    /// than doing a saturating add.
+    ///
+    /// See section 3.3 of [the AFL++
+    /// paper](https://www.usenix.org/system/files/woot20-paper-fioraldi.pdf)
+    /// for details.
+    #[inline]
+    pub fn increment(&self) {
+        let count = self.0.load(Ordering::Relaxed);
+        let (count, overflowed) = count.overflowing_add(1);
+        self.0.store(count + (overflowed as u8), Ordering::Relaxed);
+    }
+
+    /// Increment this counter, saturating at `u8::MAX`.
+    pub fn saturating_increment(&self) {
+        let count = self.0.load(Ordering::Relaxed);
+        self.0.store(count.saturating_add(1), Ordering::Relaxed);
     }
 }
 
