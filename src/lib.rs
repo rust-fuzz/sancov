@@ -1,9 +1,4 @@
-//! Rust bindings to [the `SanitizerCoverage`
-//! interface](https://clang.llvm.org/docs/SanitizerCoverage.html).
-//!
-//! These bindings are designed for generating coverage information
-//! (e.g. exposing JIT code coverage to a fuzzer) not defining consumers of it.
-
+#![doc = include_str!("../README.md")]
 #![no_std]
 #![deny(missing_docs)]
 
