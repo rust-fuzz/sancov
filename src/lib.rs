@@ -69,7 +69,7 @@ impl<const N: usize> Counters<N> {
     /// ```should_panic
     /// use sancov::Counters;
     ///
-    /// // This call will panic.
+    /// // This will panic!
     /// let _ = Counters::<0>::new();
     /// ```
     pub const fn new() -> Self {
@@ -91,7 +91,7 @@ impl<const N: usize> Counters<N> {
     /// Register the given counters with the `SanitizerCoverage` consumer.
     ///
     /// The `SanitizerCoverage` API unfortunately does not provide any method of
-    /// unregistering counters, so the given `counters` slice must be `'static`.
+    /// unregistering counters, so `&self` must be `'static`.
     ///
     /// Repeated registration is idempotent but not necessarily
     /// performant. Consider using `std::sync::Once` or [the `ctor`
@@ -129,18 +129,14 @@ impl<const N: usize> Counters<N> {
     /// 1. You have a dynamic number of logical counters, but you have to choose
     ///    a static number of actual counters at initialization time when
     ///    registering the counters because of `SanitizerCoverage` API
-    ///    constraints. Note that this method is preferable to doing `counters[i
-    ///    % counters.len()].increment()` in this situation, since that can
-    ///    suffer from harmonics.
+    ///    constraints. Note that using this method is preferable to doing
+    ///    `counters[i % counters.len()].increment()` in this situation, since
+    ///    that can suffer from harmonics.
     ///
     /// 2. You have very many and very sparsely incremented logical counters. So
     ///    many logical counters that the performance of the consumer iterating
     ///    over them all would be severely impacted if you had that many actual
     ///    counters.
-    ///
-    /// # Panics
-    ///
-    /// Panics when this slice is empty and there is no counter to increment.
     ///
     /// # Example
     ///
