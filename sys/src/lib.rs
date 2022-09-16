@@ -1,14 +1,5 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+#![no_std]
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
+extern "C" {
+    pub fn __sanitizer_cov_8bit_counters_init(start: *const u8, end: *const u8);
 }
